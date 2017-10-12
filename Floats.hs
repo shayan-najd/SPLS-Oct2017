@@ -15,8 +15,6 @@
 -- Imports
 -- ----------------------------------------------------------------------------
 
-import Prelude
-  hiding (div)
 import Control.Monad.State
 import Control.Monad.Cont
 import Data.List
@@ -30,26 +28,26 @@ x     variable
 R     rational numbers
 L,M,N ::= x | R | M + N | M - N | M * N | M / N | signum M
         | if0 L then M else N
-P     ::= \ x . P | \ x . N
+P     ::= \ x . P | N
 -}
 
-data Exp a
-  = Var a
+data Exp v
+  = Var v
   | Lit Rational
-  | Add (Exp a) (Exp a)
-  | Sub (Exp a) (Exp a)
-  | Mul (Exp a) (Exp a)
-  | Div (Exp a) (Exp a)
-  | Sig (Exp a)
-  | If0 (Exp a) (Exp a) (Exp a)
+  | Add (Exp v) (Exp v)
+  | Sub (Exp v) (Exp v)
+  | Mul (Exp v) (Exp v)
+  | Div (Exp v) (Exp v)
+  | Sig (Exp v)
+  | If0 (Exp v) (Exp v) (Exp v)
 
-type Expr = forall a. Exp a
+type Expr = forall v. Exp v
 
-data Prg a
-  = Abs1 (a -> Exp a)
-  | AbsN (a -> Prg a)
+data Prg v
+  = Bdy (Exp v)
+  | Abs (v -> Prg v)
 
-type Prog = forall a. Prg a
+type Prog = forall v. Prg v
 
 -- ----------------------------------------------------------------------------
 -- Compiler
@@ -65,16 +63,16 @@ oneP :: Expr
 oneP = Lit 1.0
 
 squareP :: Prog
-squareP = Abs1 (\ x -> Mul (Var x) (Var x))
+squareP = Abs (\ x -> Bdy (Mul (Var x) (Var x)))
 
 inc :: Prog
-inc = Abs1 (\ x -> Add (Var x) oneP)
+inc = Abs (\ x -> Bdy (Add (Var x) oneP))
 
 -- ----------------------------------------------------------------------------
 -- Embedding Exp
 -- ----------------------------------------------------------------------------
 
-instance Num (Exp a) where
+instance Num (Exp v) where
   fromInteger  = Lit . fromInteger
   (+)          = Add
   (-)          = Sub
@@ -82,9 +80,15 @@ instance Num (Exp a) where
   abs          = \ m -> Sig m * m
   signum       = Sig
 
-instance Fractional (Exp a) where
+instance Fractional (Exp v) where
   (/)          = Div
   fromRational = Lit
+
+abs1 :: (Exp v -> Exp v) -> Prg v
+abs1 f = Abs (Bdy . f . Var)
+
+abs2 :: (Exp v -> Exp v -> Exp v) -> Prg v
+abs2 f = Abs (\ x -> abs1 (f (Var x)))
 
 -- ----------------------------------------------------------------------------
 -- Example programs
@@ -94,31 +98,34 @@ oneP' :: Expr
 oneP' = 1.0
 
 squareP' :: Prog
-squareP' = Abs1 (\ x -> Var x * Var x)
+squareP' = abs1 (\ x -> x * x)
 
 inc' :: Prog
-inc' = Abs1 (\ x -> Var x + oneP)
+inc' = abs1 (\ x -> x + oneP)
+
+inc'' :: Prog
+inc'' = abs1 (+ oneP)
 
 idP :: Prog
-idP = Abs1 (id . Var)
+idP = abs1 id
 
 halfP :: Prog
-halfP = Abs1 (flip (/) 2 . Var)
+halfP = abs1 (flip (/) 2)
 
 averageP :: Prog
-averageP = AbsN (\ x -> Abs1 (\ y -> (Var x + Var y) / 2))
+averageP = abs2 (\ x y -> (x + y) / 2)
 
 average :: Fractional a => a -> a -> a
 average x y = (x + y) / 2
 
 averageP' :: Prog
-averageP' = AbsN (\ x -> Abs1 (\ y -> average (Var x) (Var y)))
+averageP' = abs2 average
 
-averageOE :: Exp a -> Exp a -> Exp a
+averageOE :: Exp v -> Exp v -> Exp v
 averageOE x y = If0 (x - y) x (average x y)
 
 averageOP :: Prog
-averageOP = AbsN (\ x -> Abs1 (\ y -> averageOE (Var x) (Var y)))
+averageOP = abs2 averageOE
 
 -- ----------------------------------------------------------------------------
 -- Problem I
@@ -128,11 +135,9 @@ averageOE' :: (Eq a, Fractional a) => a -> a -> a
 averageOE' x y = if x == y then x else average x y
 
 averageOP' :: Prog
-averageOP' = AbsN (\ x -> Abs1 (\ y -> averageOE' (Var x) (Var y)))
+averageOP' = abs2 averageOE'
 
-
-
-instance Eq (Exp a) where
+instance Eq (Exp v) where
  (==) = undefined
         -- what to write above?
         -- candidate:
@@ -191,19 +196,20 @@ instance Eq (Exp a) where
 -- Solution I
 -- ----------------------------------------------------------------------------
 
-is0M :: Exp a -> ContM a Bool
+is0M :: Exp v -> ContM v Bool
 is0M x = shift (\ k -> If0 x (k True) (k False))
 
-equalM :: Exp a -> Exp a -> ContM a Bool
+equalM :: Exp v -> Exp v -> ContM v Bool
 equalM x y = is0M (x - y)
 
-averageME :: Exp a -> Exp a -> ContM a (Exp a)
+averageME :: Exp v -> Exp v -> ContM v (Exp v)
 averageME x y = do b <- equalM x y
                    return (if b then x else average x y)
+
 averageMP :: Prog
-averageMP = AbsN (\ x -> Abs1 (\ y -> reset (averageME (Var x) (Var y))))
+averageMP = abs2 (\ x y -> reset (averageME x y))
 
-
+-- https://github.com/shayan-najd/SPLS-Oct2017
 
 
 
@@ -257,7 +263,7 @@ power Zero     _ = 1
 power (Succ n) x = x * (power n x)
 
 powerP :: Nat -> Prog
-powerP n = Abs1 (power n . Var)
+powerP n = Abs (Bdy . power n . Var)
 
 powerP3 :: String
 powerP3 = showP (powerP (Succ (Succ (Succ Zero))))
@@ -278,11 +284,11 @@ double main (double x0)
 -- Solution II
 -- ----------------------------------------------------------------------------
 
-data RatS a
+data RatS v
   = Sta Rational
-  | Dyn (Exp a)
+  | Dyn (Exp v)
 
-instance Num (RatS a) where
+instance Num (RatS v) where
   fromInteger r       = Sta (fromInteger r)
 
   (Sta r1) + (Sta r2) = Sta (r1 + r2)
@@ -312,7 +318,7 @@ instance Num (RatS a) where
   signum (Sta r)      = Sta (signum r)
   signum (Dyn m)      = Dyn (signum m)
 
-instance Fractional (RatS a) where
+instance Fractional (RatS v) where
   fromRational r      = Sta r
 
   (Sta r1) / (Sta r2) = Sta (r1 / r2)
@@ -321,15 +327,15 @@ instance Fractional (RatS a) where
   (Dyn m)  / (Sta r2) = Dyn (m / Lit r2)
   (Dyn m)  / (Dyn n)  = Dyn (m / n)
 
-ratSU :: Exp a -> RatS a
+ratSU :: Exp v -> RatS v
 ratSU = Dyn
 
-ratSD :: RatS a -> Exp a
+ratSD :: RatS v -> Exp v
 ratSD (Sta r) = Lit r
 ratSD (Dyn m) = m
 
 powerSP :: Nat -> Prog
-powerSP n = Abs1 (ratSD . power n . ratSU . Var)
+powerSP n = Abs (Bdy . ratSD . power n . ratSU . Var)
 
 powerSP3 :: String
 powerSP3 = showP (powerSP (Succ (Succ (Succ Zero))))
@@ -375,12 +381,10 @@ newName = do i <- get
 instance Show (Prg String) where
   show m = evalState (showM m) 0
     where
-      showM (Abs1 f) = do x <- newName
-                          let w = show (f x)
-                          return ("Abs1 (\\ " ++ x ++ " -> " ++ w ++ ")")
-      showM (AbsN f) = do x <- newName
-                          w <- showM (f x)
-                          return ("AbsN (\\ " ++ x ++ " -> " ++ w ++ ")")
+      showM (Bdy n) = return ("Bdy " ++ show n)
+      showM (Abs f) = do x <- newName
+                         w <- showM (f x)
+                         return ("Abs (\\ " ++ x ++ " -> " ++ w ++ ")")
 
 showP :: Prog -> String
 showP m = show (m :: Prg String)
@@ -418,10 +422,9 @@ compile m = let (c, (xs, _)) = runState (compile' m) ([], 0)
                                ++ ")\n  {\n    return (" ++ c ++ ");\n  }"
   where
     compile' :: Prg Var -> VarM C
-    compile' (Abs1 f) = do x <- newVar
-                           return (compileExp (f x))
-    compile' (AbsN f) = do x <- newVar
-                           compile' (f x)
+    compile' (Bdy n) = return (compileExp n)
+    compile' (Abs f) = do x <- newVar
+                          compile' (f x)
 
 
 -- ----------------------------------------------------------------------------
@@ -432,10 +435,10 @@ data Nat
   = Zero
   | Succ Nat
 
-type ContM a b = Cont (Exp a) b
+type ContM v a = Cont (Exp v) a
 
-shift :: ((b -> Exp a) -> Exp a) -> ContM a b
+shift :: ((a -> Exp v) -> Exp v) -> ContM v a
 shift = cont
 
-reset :: ContM a (Exp a) -> Exp a
+reset :: ContM v (Exp v) -> Exp v
 reset = flip runCont id
